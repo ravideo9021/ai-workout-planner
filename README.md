@@ -28,7 +28,7 @@ A modern, responsive web application that generates personalized workout plans u
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/ai-workout-planner.git
+   git clone https://github.com/ravideo9021/ai-workout-planner.git
    cd ai-workout-planner
    ```
 
@@ -79,7 +79,3 @@ ai-workout-planner/
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details. 
