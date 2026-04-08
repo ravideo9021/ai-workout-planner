@@ -2,6 +2,8 @@
 
 A production-oriented Next.js fitness platform that generates personalized, adaptive workout plans using a hybrid AI pipeline: safety constraints + scoring algorithm + LLM coaching summaries (Gemini/OpenAI).
 
+Live site: https://ai-workout-planner-chi.vercel.app
+
 ## Features
 
 - Constraint-aware workout generation (equipment, injuries, level)
