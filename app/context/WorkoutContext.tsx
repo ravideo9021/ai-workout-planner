@@ -1,50 +1,228 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
-import { WorkoutPlan, WorkoutDay, Exercise, UserPreferences } from '../types/workoutTypes';
+'use client';
+
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import {
+  AIInsight,
+  AuthUser,
+  UserPreferences,
+  WorkoutGenerationMeta,
+  WorkoutLog,
+  WorkoutPlan
+} from '../types/workoutTypes';
 
 interface WorkoutContextType {
+  user: AuthUser | null;
+  authLoading: boolean;
   userPreferences: UserPreferences | null;
   workoutPlan: WorkoutPlan | null;
+  workoutHistory: WorkoutLog[];
+  generationMeta: WorkoutGenerationMeta | null;
+  aiInsights: AIInsight[];
   isGenerating: boolean;
-  saveUserPreferences: (preferences: UserPreferences) => void;
-  generateWorkoutPlan: () => Promise<void>;
+  generationError: string | null;
+  signUp: (name: string, email: string, password: string) => Promise<void>;
+  signIn: (email: string, password: string) => Promise<void>;
+  signOut: () => Promise<void>;
+  refreshFromServer: () => Promise<void>;
+  saveUserPreferences: (preferences: UserPreferences) => Promise<void>;
+  generateWorkoutPlan: (preferencesOverride?: UserPreferences, force?: boolean) => Promise<void>;
   resetWorkoutPlan: () => void;
+  logWorkout: (entry: Omit<WorkoutLog, 'id' | 'completedAt'>) => Promise<void>;
+  getReadinessTrend: () => 'improving' | 'stable' | 'declining';
 }
+
+const STORAGE_KEYS = {
+  preferences: 'ai-workout-preferences-v2',
+  plan: 'ai-workout-plan-v2',
+  history: 'ai-workout-history-v2',
+  meta: 'ai-workout-meta-v2'
+};
 
 const WorkoutContext = createContext<WorkoutContextType | undefined>(undefined);
 
+const safeJson = async (res: Response) => {
+  try {
+    return await res.json();
+  } catch {
+    return {};
+  }
+};
+
 export const useWorkout = () => {
   const context = useContext(WorkoutContext);
-  if (context === undefined) {
-    throw new Error('useWorkout must be used within a WorkoutProvider');
-  }
+  if (!context) throw new Error('useWorkout must be used within a WorkoutProvider');
   return context;
 };
 
-export const WorkoutProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [userPreferences, setUserPreferences] = useState<UserPreferences | null>(null);
   const [workoutPlan, setWorkoutPlan] = useState<WorkoutPlan | null>(null);
-  const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [workoutHistory, setWorkoutHistory] = useState<WorkoutLog[]>([]);
+  const [generationMeta, setGenerationMeta] = useState<WorkoutGenerationMeta | null>(null);
+  const [aiInsights, setAIInsights] = useState<AIInsight[]>([]);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
 
-  const saveUserPreferences = (preferences: UserPreferences) => {
-    setUserPreferences(preferences);
+  const persist = (key: string, value: unknown) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (error) {
+      console.error('workout-context-persist-error', error);
+    }
   };
 
-  const generateWorkoutPlan = async () => {
-    if (!userPreferences) return;
-    
-    setIsGenerating(true);
-    
+  const hydrateLocal = () => {
     try {
-      // In a real application, this would be an API call to an AI service
-      // For demonstration, we'll simulate a delay and return mock data
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Mock workout plan generation based on user preferences
-      const mockPlan = generateMockWorkoutPlan(userPreferences);
-      setWorkoutPlan(mockPlan);
+      const storedPreferences = localStorage.getItem(STORAGE_KEYS.preferences);
+      const storedPlan = localStorage.getItem(STORAGE_KEYS.plan);
+      const storedHistory = localStorage.getItem(STORAGE_KEYS.history);
+      const storedMeta = localStorage.getItem(STORAGE_KEYS.meta);
+
+      if (storedPreferences) setUserPreferences(JSON.parse(storedPreferences));
+      if (storedPlan) setWorkoutPlan(JSON.parse(storedPlan));
+      if (storedHistory) setWorkoutHistory(JSON.parse(storedHistory));
+      if (storedMeta) setGenerationMeta(JSON.parse(storedMeta));
     } catch (error) {
-      console.error('Error generating workout plan:', error);
-      // Handle error state here
+      console.error('workout-context-load-error', error);
+    }
+  };
+
+  const fetchUser = async (): Promise<AuthUser | null> => {
+    const res = await fetch('/api/auth/me', { cache: 'no-store' });
+    if (!res.ok) return null;
+    const payload = await safeJson(res);
+    return payload.user || null;
+  };
+
+  const refreshFromServer = async () => {
+    const res = await fetch('/api/user/plan', { cache: 'no-store' });
+    if (!res.ok) return;
+    const payload = await safeJson(res);
+
+    setWorkoutPlan(payload.plan || null);
+    setUserPreferences(payload.preferences || null);
+    setWorkoutHistory(payload.workoutHistory || []);
+    setGenerationMeta(payload.meta || null);
+    setAIInsights(payload.insights || []);
+
+    if (payload.plan) persist(STORAGE_KEYS.plan, payload.plan);
+    if (payload.preferences) persist(STORAGE_KEYS.preferences, payload.preferences);
+    if (payload.workoutHistory) persist(STORAGE_KEYS.history, payload.workoutHistory);
+    if (payload.meta) persist(STORAGE_KEYS.meta, payload.meta);
+  };
+
+  useEffect(() => {
+    hydrateLocal();
+    (async () => {
+      try {
+        const currentUser = await fetchUser();
+        setUser(currentUser);
+        if (currentUser) await refreshFromServer();
+      } finally {
+        setAuthLoading(false);
+      }
+    })();
+  }, []);
+
+  const signUp = async (name: string, email: string, password: string) => {
+    const res = await fetch('/api/auth/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password })
+    });
+    const payload = await safeJson(res);
+    if (!res.ok) throw new Error(payload?.error || 'Sign up failed');
+    setUser(payload.user);
+    await refreshFromServer();
+  };
+
+  const signIn = async (email: string, password: string) => {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    const payload = await safeJson(res);
+    if (!res.ok) throw new Error(payload?.error || 'Sign in failed');
+    setUser(payload.user);
+    await refreshFromServer();
+  };
+
+  const signOut = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    setUser(null);
+    setAIInsights([]);
+  };
+
+  const saveUserPreferences = async (preferences: UserPreferences) => {
+    setUserPreferences(preferences);
+    persist(STORAGE_KEYS.preferences, preferences);
+
+    if (!user) return;
+    const res = await fetch('/api/user/preferences', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preferences })
+    });
+    if (!res.ok) {
+      const payload = await safeJson(res);
+      throw new Error(payload?.error || 'Failed to save preferences');
+    }
+  };
+
+  const generateWorkoutPlan = async (preferencesOverride?: UserPreferences, force = false) => {
+    const payloadPreferences = preferencesOverride || userPreferences;
+    if (!payloadPreferences) return;
+
+    setIsGenerating(true);
+    setGenerationError(null);
+
+    try {
+      if (user) {
+        const res = await fetch('/api/user/plan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ preferences: payloadPreferences, force })
+        });
+        const payload = await safeJson(res);
+        if (!res.ok) throw new Error(payload?.error || 'Plan generation failed');
+
+        setWorkoutPlan(payload.plan || null);
+        setUserPreferences(payload.preferences || payloadPreferences);
+        setWorkoutHistory(payload.workoutHistory || []);
+        setGenerationMeta(payload.meta || null);
+        setAIInsights(payload.insights || []);
+
+        if (payload.plan) persist(STORAGE_KEYS.plan, payload.plan);
+        if (payload.meta) persist(STORAGE_KEYS.meta, payload.meta);
+        if (payload.workoutHistory) persist(STORAGE_KEYS.history, payload.workoutHistory);
+        persist(STORAGE_KEYS.preferences, payload.preferences || payloadPreferences);
+        return;
+      }
+
+      const response = await fetch('/api/ai/workout-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preferences: payloadPreferences,
+          workoutHistory
+        })
+      });
+
+      const payload = await safeJson(response);
+      if (!response.ok) throw new Error(payload?.error || 'Plan generation failed');
+
+      setWorkoutPlan(payload.plan);
+      setGenerationMeta(payload.meta);
+      setAIInsights(payload.insights || []);
+      persist(STORAGE_KEYS.plan, payload.plan);
+      persist(STORAGE_KEYS.meta, payload.meta);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected error while generating plan.';
+      setGenerationError(message);
+      console.error('generate-plan-error', error);
     } finally {
       setIsGenerating(false);
     }
@@ -52,258 +230,85 @@ export const WorkoutProvider: React.FC<{ children: ReactNode }> = ({ children })
 
   const resetWorkoutPlan = () => {
     setWorkoutPlan(null);
+    setGenerationMeta(null);
+    setAIInsights([]);
+    persist(STORAGE_KEYS.plan, null);
+    persist(STORAGE_KEYS.meta, null);
   };
 
-  return (
-    <WorkoutContext.Provider
-      value={{
-        userPreferences,
-        workoutPlan,
-        isGenerating,
-        saveUserPreferences,
-        generateWorkoutPlan,
-        resetWorkoutPlan
-      }}
-    >
-      {children}
-    </WorkoutContext.Provider>
+  const logWorkout = async (entry: Omit<WorkoutLog, 'id' | 'completedAt'>) => {
+    if (user) {
+      const res = await fetch('/api/user/workouts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry)
+      });
+      const payload = await safeJson(res);
+      if (!res.ok) throw new Error(payload?.error || 'Failed to log workout');
+      const updated = payload.workoutHistory || [];
+      setWorkoutHistory(updated);
+      persist(STORAGE_KEYS.history, updated);
+      return;
+    }
+
+    const next: WorkoutLog = {
+      ...entry,
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      completedAt: new Date().toISOString()
+    };
+
+    const updated = [next, ...workoutHistory].slice(0, 100);
+    setWorkoutHistory(updated);
+    persist(STORAGE_KEYS.history, updated);
+  };
+
+  const getReadinessTrend = () => {
+    if (workoutHistory.length < 6) return 'stable';
+    const recent = workoutHistory.slice(0, 3);
+    const prior = workoutHistory.slice(3, 6);
+    const score = (items: WorkoutLog[]) =>
+      items.reduce((sum, item) => sum + item.completionRate - item.perceivedDifficulty * 4, 0) / items.length;
+    const delta = score(recent) - score(prior);
+    if (delta > 8) return 'improving';
+    if (delta < -8) return 'declining';
+    return 'stable';
+  };
+
+  const value = useMemo(
+    () => ({
+      user,
+      authLoading,
+      userPreferences,
+      workoutPlan,
+      workoutHistory,
+      generationMeta,
+      aiInsights,
+      isGenerating,
+      generationError,
+      signUp,
+      signIn,
+      signOut,
+      refreshFromServer,
+      saveUserPreferences,
+      generateWorkoutPlan,
+      resetWorkoutPlan,
+      logWorkout,
+      getReadinessTrend
+    }),
+    [
+      user,
+      authLoading,
+      userPreferences,
+      workoutPlan,
+      workoutHistory,
+      generationMeta,
+      aiInsights,
+      isGenerating,
+      generationError
+    ]
   );
+
+  return <WorkoutContext.Provider value={value}>{children}</WorkoutContext.Provider>;
 };
 
-// Helper function to generate a mock workout plan based on user preferences
-const generateMockWorkoutPlan = (preferences: UserPreferences): WorkoutPlan => {
-  const { fitnessLevel, primaryGoal, daysPerWeek, timePerSession, equipment, workoutPreferences } = preferences;
-  
-  // Basic logic to adjust workout intensity based on fitness level
-  const intensityMultiplier = {
-    beginner: 0.7,
-    intermediate: 1,
-    advanced: 1.3,
-    athlete: 1.5
-  }[fitnessLevel] || 1;
-  
-  // Generate the appropriate number of workout days
-  const days: WorkoutDay[] = [];
-  
-  // Define different workout focuses based on goals and preferences
-  const workoutFocuses = determineWorkoutFocuses(primaryGoal, workoutPreferences, daysPerWeek);
-  
-  for (let i = 0; i < daysPerWeek; i++) {
-    const dayNumber = i + 1;
-    const dayName = `Day ${dayNumber}`;
-    const focus = workoutFocuses[i % workoutFocuses.length];
-    
-    days.push({
-      day: dayName,
-      focus,
-      warmup: generateWarmupExercises(focus),
-      exercises: generateMainExercises(focus, equipment, intensityMultiplier, timePerSession),
-      cooldown: generateCooldownExercises()
-    });
-  }
-  
-  return {
-    title: `${daysPerWeek}-Day ${capitalizeFirstLetter(primaryGoal)} Workout Plan`,
-    description: `Personalized ${fitnessLevel} level workout plan focused on ${primaryGoal}, designed for ${timePerSession} minute sessions.`,
-    days
-  };
-};
-
-const determineWorkoutFocuses = (goal: string, preferences: string[], daysPerWeek: number): string[] => {
-  // Logic to determine workout focus distribution based on goal and preferences
-  switch (goal) {
-    case 'weight-loss':
-      return ['Full Body HIIT', 'Cardio', 'Lower Body', 'Upper Body', 'Core & Cardio', 'Active Recovery', 'Cardio'];
-    case 'muscle-gain':
-      return ['Chest & Triceps', 'Back & Biceps', 'Legs & Shoulders', 'Rest & Recovery', 'Full Body', 'Arms & Core', 'Rest'];
-    case 'endurance':
-      return ['Long Cardio', 'Tempo Training', 'Interval Training', 'Strength & Endurance', 'Speed Work', 'Recovery', 'Long Cardio'];
-    case 'strength':
-      return ['Lower Body Strength', 'Upper Body Push', 'Rest', 'Upper Body Pull', 'Full Body Strength', 'Olympic Lifts', 'Rest'];
-    case 'flexibility':
-      return ['Dynamic Flexibility', 'Strength & Mobility', 'Yoga Flow', 'Active Recovery', 'Balance & Stability', 'Deep Stretching', 'Rest'];
-    default:
-      return ['Full Body', 'Cardio', 'Upper Body', 'Lower Body', 'HIIT', 'Mobility', 'Rest'];
-  }
-};
-
-const generateWarmupExercises = (focus: string): string[] => {
-  // Common warm-up exercises
-  const commonWarmups = [
-    'Light jogging or marching in place for 3 minutes',
-    'Arm circles (forward and backward) - 10 each direction',
-    'Hip rotations - 10 each direction',
-    'Bodyweight squats - 10 reps',
-    'Jumping jacks - 30 seconds'
-  ];
-  
-  // Additional warm-ups based on focus
-  if (focus.includes('Upper Body')) {
-    return [...commonWarmups, 'Shoulder rotations - 10 each direction', 'Wall push-ups - 10 reps'];
-  } else if (focus.includes('Lower Body')) {
-    return [...commonWarmups, 'Leg swings - 10 each leg', 'Walking lunges - 10 each leg'];
-  } else {
-    return commonWarmups;
-  }
-};
-
-const generateMainExercises = (focus: string, equipment: string[], intensityMultiplier: number, timePerSession: number): Exercise[] => {
-  // This is a simplified version - a real implementation would have more complex logic
-  // based on equipment availability, fitness level, etc.
-  
-  const hasEquipment = (items: string[]) => items.some(item => equipment.includes(item));
-  const hasDumbbells = hasEquipment(['Dumbbells']);
-  const hasBarbell = hasEquipment(['Barbell']);
-  const hasBands = hasEquipment(['Resistance Bands']);
-  
-  const exercises: Exercise[] = [];
-  
-  // Number of exercises based on session time
-  const exerciseCount = Math.floor(timePerSession / 15) + 2;
-  
-  if (focus.includes('Upper Body') || focus.includes('Chest') || focus.includes('Back') || focus.includes('Arms')) {
-    if (hasBarbell) {
-      exercises.push({
-        name: 'Bench Press',
-        sets: Math.round(4 * intensityMultiplier),
-        reps: '8-10',
-        rest: '60-90 sec',
-        notes: 'Focus on controlled movement'
-      });
-    }
-    
-    if (hasDumbbells) {
-      exercises.push({
-        name: 'Dumbbell Rows',
-        sets: Math.round(3 * intensityMultiplier),
-        reps: '10-12',
-        rest: '60 sec',
-        notes: 'Keep back straight'
-      });
-      
-      exercises.push({
-        name: 'Overhead Press',
-        sets: Math.round(3 * intensityMultiplier),
-        reps: '8-10',
-        rest: '60-90 sec'
-      });
-    }
-    
-    exercises.push({
-      name: 'Push-ups',
-      sets: Math.round(3 * intensityMultiplier),
-      reps: '10-15',
-      rest: '45-60 sec',
-      notes: 'Modify on knees if needed'
-    });
-  }
-  
-  if (focus.includes('Lower Body') || focus.includes('Legs')) {
-    if (hasBarbell) {
-      exercises.push({
-        name: 'Barbell Squats',
-        sets: Math.round(4 * intensityMultiplier),
-        reps: '8-10',
-        rest: '90-120 sec',
-        notes: 'Keep chest up, push through heels'
-      });
-      
-      exercises.push({
-        name: 'Romanian Deadlifts',
-        sets: Math.round(3 * intensityMultiplier),
-        reps: '10-12',
-        rest: '90 sec',
-        notes: 'Focus on hip hinge'
-      });
-    }
-    
-    if (hasDumbbells) {
-      exercises.push({
-        name: 'Walking Lunges',
-        sets: Math.round(3 * intensityMultiplier),
-        reps: '10 each leg',
-        rest: '60 sec'
-      });
-    }
-    
-    exercises.push({
-      name: 'Bodyweight Squats',
-      sets: Math.round(3 * intensityMultiplier),
-      reps: '15-20',
-      rest: '45-60 sec'
-    });
-  }
-  
-  if (focus.includes('Core') || focus.includes('Full Body')) {
-    exercises.push({
-      name: 'Planks',
-      sets: Math.round(3 * intensityMultiplier),
-      reps: '30-45 sec',
-      rest: '30 sec',
-      notes: 'Keep body in straight line'
-    });
-    
-    exercises.push({
-      name: 'Russian Twists',
-      sets: Math.round(3 * intensityMultiplier),
-      reps: '15 each side',
-      rest: '45 sec'
-    });
-  }
-  
-  if (focus.includes('Cardio') || focus.includes('HIIT')) {
-    exercises.push({
-      name: 'Burpees',
-      sets: Math.round(3 * intensityMultiplier),
-      reps: '10-15',
-      rest: '30-45 sec',
-      notes: 'Modify by stepping back if needed'
-    });
-    
-    exercises.push({
-      name: 'Mountain Climbers',
-      sets: Math.round(3 * intensityMultiplier),
-      reps: '30 sec',
-      rest: '30 sec'
-    });
-    
-    exercises.push({
-      name: 'Jump Squats',
-      sets: Math.round(3 * intensityMultiplier),
-      reps: '15',
-      rest: '45 sec',
-      notes: 'Land softly'
-    });
-  }
-  
-  // Ensure we have enough exercises based on the time per session
-  while (exercises.length < exerciseCount) {
-    exercises.push({
-      name: 'Bodyweight Circuit',
-      sets: Math.round(2 * intensityMultiplier),
-      reps: '30 sec each exercise',
-      rest: '60 sec between sets',
-      notes: 'Squats, push-ups, sit-ups, and jumping jacks'
-    });
-  }
-  
-  // Limit to the calculated exercise count
-  return exercises.slice(0, exerciseCount);
-};
-
-const generateCooldownExercises = (): string[] => {
-  return [
-    'Light walking or marching in place - 2 minutes',
-    'Quadriceps stretch - 30 seconds each leg',
-    'Hamstring stretch - 30 seconds each leg',
-    'Chest stretch - 30 seconds',
-    'Child\'s pose - 30 seconds',
-    'Deep breathing - 5 deep breaths'
-  ];
-};
-
-const capitalizeFirstLetter = (string: string): string => {
-  return string.charAt(0).toUpperCase() + string.slice(1);
-};
-
-export default WorkoutProvider; 
+export default WorkoutProvider;

@@ -1,140 +1,104 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { useWorkout } from '../context/WorkoutContext';
 
 export default function Navbar() {
-  const [scrollPosition, setScrollPosition] = useState(0);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { user, authLoading, signOut } = useWorkout();
+  const [open, setOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
-    const handleScroll = () => {
-      setScrollPosition(window.scrollY);
-    };
-    
-    window.addEventListener('scroll', handleScroll);
-    return () => {
-      window.removeEventListener('scroll', handleScroll);
-    };
+    const onScroll = () => setScrolled(window.scrollY > 12);
+    window.addEventListener('scroll', onScroll);
+    return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
-  const toggleMobileMenu = () => {
-    setMobileMenuOpen(!mobileMenuOpen);
-  };
-
   return (
-    <nav className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrollPosition > 50 ? 'bg-gray-900/95 backdrop-blur-sm shadow-lg' : 'bg-transparent'}`}>
-      <div className="container mx-auto px-4 py-4">
-        <div className="flex justify-between items-center">
-          <Link 
-            href="/"
-            className="text-xl font-bold text-blue-400 flex items-center cursor-pointer hover:text-blue-300 transition-colors focus:outline-none"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-            AI Workout Planner
+    <header
+      className={`fixed top-0 inset-x-0 z-50 transition-all duration-300 ${
+        scrolled ? 'backdrop-blur-xl bg-[#060912]/86 border-b border-slate-700/50' : 'bg-transparent'
+      }`}
+    >
+      <div className="section-shell py-4">
+        <div className="flex items-center justify-between gap-3">
+          <Link href="/" className="flex items-center gap-2 font-bold text-cyan-300 text-lg">
+            <span className="inline-grid place-items-center h-8 w-8 rounded-lg bg-cyan-400/15 border border-cyan-300/40">⚡</span>
+            PulseForge
           </Link>
-          
-          {/* Mobile menu button */}
-          <button 
-            className="md:hidden flex items-center text-white focus:outline-none"
-            onClick={toggleMobileMenu}
-          >
-            <svg 
-              className="h-6 w-6" 
-              fill="none" 
-              viewBox="0 0 24 24" 
-              stroke="currentColor"
-            >
-              {mobileMenuOpen ? (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              ) : (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-              )}
-            </svg>
+
+          <nav className="hidden md:flex items-center gap-6 text-sm text-slate-200">
+            <NavLink href="/create-workout" label="Plan Builder" />
+            <NavLink href="/progress-tracker" label="Analytics" />
+            <NavLink href="/about" label="Method" />
+            {user?.role === 'coach' || user?.role === 'admin' ? <NavLink href="/dashboard/coach" label="Coach" /> : null}
+            {user?.role === 'admin' ? <NavLink href="/dashboard/admin" label="Admin" /> : null}
+          </nav>
+
+          <div className="hidden md:flex items-center gap-3">
+            {authLoading ? (
+              <span className="text-sm muted">Loading</span>
+            ) : user ? (
+              <>
+                <span className="text-sm text-slate-200">{user.name}</span>
+                <button onClick={() => signOut()} className="btn-muted py-2 px-4 text-sm">
+                  Sign Out
+                </button>
+              </>
+            ) : (
+              <Link href="/sign-in" className="btn-brand py-2 px-4 text-sm">
+                Sign In
+              </Link>
+            )}
+          </div>
+
+          <button onClick={() => setOpen((v) => !v)} className="md:hidden btn-muted py-2 px-3 text-sm">
+            Menu
           </button>
-          
-          {/* Desktop menu */}
-          <div className="hidden md:flex items-center space-x-8">
-            <Link 
-              href="/"
-              className="text-white hover:text-blue-400 transition-colors cursor-pointer relative group font-medium"
-            >
-              <span>Home</span>
-              <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-blue-400 transition-all duration-300 group-hover:w-full"></span>
-            </Link>
-            <Link 
-              href="/create-workout"
-              className="text-white hover:text-blue-400 transition-colors cursor-pointer relative group font-medium"
-            >
-              <span>Create Workout</span>
-              <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-blue-400 transition-all duration-300 group-hover:w-full"></span>
-            </Link>
-            <Link 
-              href="/progress-tracker"
-              className="text-white hover:text-blue-400 transition-colors cursor-pointer relative group font-medium"
-            >
-              <span>Progress Tracker</span>
-              <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-blue-400 transition-all duration-300 group-hover:w-full"></span>
-            </Link>
-            <Link 
-              href="/about"
-              className="text-white hover:text-blue-400 transition-colors cursor-pointer relative group font-medium"
-            >
-              <span>About</span>
-              <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-blue-400 transition-all duration-300 group-hover:w-full"></span>
-            </Link>
-            <Link 
-              href="/sign-in"
-              className="bg-blue-600 hover:bg-blue-500 text-white py-2 px-5 rounded-full transition-all hover:shadow-lg transform hover:-translate-y-0.5 active:translate-y-0 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-50 font-medium"
-            >
-              Sign In
-            </Link>
-          </div>
         </div>
-        
-        {/* Mobile menu */}
-        <div className={`md:hidden transition-all duration-300 overflow-hidden ${mobileMenuOpen ? 'max-h-60 opacity-100 mt-4' : 'max-h-0 opacity-0'}`}>
-          <div className="flex flex-col space-y-4 py-2 px-2 bg-gray-800/80 backdrop-blur-sm rounded-lg">
-            <Link 
-              href="/"
-              className="text-white hover:text-blue-400 transition-colors py-2 px-3 rounded-md hover:bg-gray-700/50"
-              onClick={() => setMobileMenuOpen(false)}
-            >
-              Home
-            </Link>
-            <Link 
-              href="/create-workout"
-              className="text-white hover:text-blue-400 transition-colors py-2 px-3 rounded-md hover:bg-gray-700/50"
-              onClick={() => setMobileMenuOpen(false)}
-            >
-              Create Workout
-            </Link>
-            <Link 
-              href="/progress-tracker"
-              className="text-white hover:text-blue-400 transition-colors py-2 px-3 rounded-md hover:bg-gray-700/50"
-              onClick={() => setMobileMenuOpen(false)}
-            >
-              Progress Tracker
-            </Link>
-            <Link 
-              href="/about"
-              className="text-white hover:text-blue-400 transition-colors py-2 px-3 rounded-md hover:bg-gray-700/50"
-              onClick={() => setMobileMenuOpen(false)}
-            >
-              About
-            </Link>
-            <Link 
-              href="/sign-in"
-              className="bg-blue-600 hover:bg-blue-500 text-white py-2 px-4 rounded-md transition-all text-center font-medium"
-              onClick={() => setMobileMenuOpen(false)}
-            >
-              Sign In
-            </Link>
+
+        {open && (
+          <div className="md:hidden mt-3 glass-card p-3 space-y-2">
+            <MobileLink href="/create-workout" label="Plan Builder" close={() => setOpen(false)} />
+            <MobileLink href="/progress-tracker" label="Analytics" close={() => setOpen(false)} />
+            <MobileLink href="/about" label="Method" close={() => setOpen(false)} />
+            {user?.role === 'coach' || user?.role === 'admin' ? (
+              <MobileLink href="/dashboard/coach" label="Coach" close={() => setOpen(false)} />
+            ) : null}
+            {user?.role === 'admin' ? <MobileLink href="/dashboard/admin" label="Admin" close={() => setOpen(false)} /> : null}
+            {user ? (
+              <button
+                onClick={async () => {
+                  await signOut();
+                  setOpen(false);
+                }}
+                className="w-full btn-muted text-sm"
+              >
+                Sign Out
+              </button>
+            ) : (
+              <MobileLink href="/sign-in" label="Sign In" close={() => setOpen(false)} />
+            )}
           </div>
-        </div>
+        )}
       </div>
-    </nav>
+    </header>
   );
-} 
+}
+
+function NavLink({ href, label }: { href: string; label: string }) {
+  return (
+    <Link href={href} className="hover:text-cyan-300 transition-colors">
+      {label}
+    </Link>
+  );
+}
+
+function MobileLink({ href, label, close }: { href: string; label: string; close: () => void }) {
+  return (
+    <Link href={href} className="block w-full btn-muted text-sm" onClick={close}>
+      {label}
+    </Link>
+  );
+}
